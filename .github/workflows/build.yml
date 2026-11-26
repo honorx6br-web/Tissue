@@ -1,0 +1,440 @@
+name: Build APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Restore signing key
+        uses: actions/cache@v4
+        with:
+          path: release.keystore
+          key: tissue-keystore-v1
+
+      - name: Create signing key if missing
+        run: |
+          if [ ! -f release.keystore ]; then
+            keytool -genkeypair -keystore release.keystore -storepass tissue123 -keypass tissue123 -alias tissue -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Tissue, O=Tissue, C=BD"
+          fi
+
+      - name: Generate Android project
+        run: |
+          mkdir -p app/src/main/assets app/src/main/java/com/village/tracker
+          mkdir -p app/src/main/res/values app/src/main/res/drawable app/src/main/res/mipmap-anydpi-v26
+          mkdir -p app/src/main/res/layout app/src/main/res/xml
+          src=$(ls *.html | head -n 1)
+          if [ -z "$src" ]; then echo "No html file found in repo"; exit 1; fi
+          cp "$src" app/src/main/assets/index.html
+
+          cat > settings.gradle <<'EOF'
+          pluginManagement {
+            repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+            repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "Tissue"
+          include(":app")
+          EOF
+
+          cat > build.gradle <<'EOF'
+          plugins { id 'com.android.application' version '8.5.2' apply false }
+          EOF
+
+          cat > gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2g
+          android.nonTransitiveRClass=true
+          EOF
+
+          cat > app/build.gradle <<'EOF'
+          plugins { id 'com.android.application' }
+          android {
+            namespace 'com.village.tracker'
+            compileSdk 34
+            defaultConfig {
+              applicationId 'com.village.tracker'
+              minSdk 26
+              targetSdk 34
+              versionCode 5
+              versionName '3.0'
+            }
+            signingConfigs {
+              stable {
+                storeFile rootProject.file('release.keystore')
+                storePassword 'tissue123'
+                keyAlias 'tissue'
+                keyPassword 'tissue123'
+              }
+            }
+            buildTypes {
+              debug { signingConfig signingConfigs.stable }
+            }
+            compileOptions {
+              sourceCompatibility JavaVersion.VERSION_17
+              targetCompatibility JavaVersion.VERSION_17
+            }
+          }
+          EOF
+
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+            <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" android:maxSdkVersion="32"/>
+            <uses-permission android:name="android.permission.USE_EXACT_ALARM"/>
+            <application
+              android:label="Tissue"
+              android:icon="@mipmap/ic_launcher"
+              android:roundIcon="@mipmap/ic_launcher"
+              android:theme="@style/AppTheme"
+              android:allowBackup="true">
+              <activity
+                android:name=".MainActivity"
+                android:exported="true"
+                android:configChanges="orientation|screenSize|keyboardHidden">
+                <intent-filter>
+                  <action android:name="android.intent.action.MAIN"/>
+                  <category android:name="android.intent.category.LAUNCHER"/>
+                </intent-filter>
+              </activity>
+              <receiver android:name=".VillageWidget" android:exported="false">
+                <intent-filter>
+                  <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
+                </intent-filter>
+                <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_info"/>
+              </receiver>
+            </application>
+          </manifest>
+          EOF
+
+          cat > app/src/main/res/values/styles.xml <<'EOF'
+          <resources>
+            <style name="AppTheme" parent="android:Theme.Material.NoActionBar">
+              <item name="android:statusBarColor">#05060C</item>
+              <item name="android:navigationBarColor">#05060C</item>
+              <item name="android:windowBackground">#05060C</item>
+            </style>
+          </resources>
+          EOF
+
+          cat > app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+            <background android:drawable="@drawable/ic_bg"/>
+            <foreground android:drawable="@drawable/ic_fg"/>
+          </adaptive-icon>
+          EOF
+
+          cat > app/src/main/res/drawable/ic_bg.xml <<'EOF'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+            android:width="108dp" android:height="108dp"
+            android:viewportWidth="108" android:viewportHeight="108">
+            <path android:fillColor="#0E1A2E" android:pathData="M0,0h108v108h-108z"/>
+            <path android:fillColor="#1B3560" android:fillAlpha="0.8" android:pathData="M0,0 L108,0 L108,44 L0,78 Z"/>
+            <path android:fillColor="#24427A" android:fillAlpha="0.5" android:pathData="M54,54 m-34,0 a34,34 0 1,0 68,0 a34,34 0 1,0 -68,0"/>
+          </vector>
+          EOF
+
+          cat > app/src/main/res/drawable/ic_fg.xml <<'EOF'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+            android:width="108dp" android:height="108dp"
+            android:viewportWidth="108" android:viewportHeight="108">
+            <path android:fillColor="#FFC83D" android:pathData="M38,47 L41,35 L48,41 L54,31 L60,41 L67,35 L70,47 Z"/>
+            <path android:strokeColor="#FFC83D" android:strokeAlpha="0.5" android:strokeWidth="1" android:pathData="M30,53.5 H78"/>
+            <path android:strokeColor="#FFC83D" android:strokeWidth="3" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M27.5,72 L27.5,58 L32.5,58 C36,58 36,64.5 32.5,64.5 L27.5,64.5 M31.5,64.5 L35.5,72 M38.5,72 L42.5,58 L46.5,72 M40.1,67.5 L44.9,67.5 M49.5,58 L49.5,72 M57.5,58 L50.5,65.5 M52.5,63.5 L57.5,72 M62,58 L67,58 M64.5,58 L64.5,72 M62,72 L67,72 M71.5,58 L71.5,72 M71.5,58 L76.5,58 C80,58 80,64.5 76.5,64.5 L71.5,64.5 M76.5,64.5 C80.5,64.5 80.5,72 76.5,72 L71.5,72"/>
+          </vector>
+          EOF
+
+          cat > app/src/main/res/drawable/widget_bg.xml <<'EOF'
+          <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+            <solid android:color="#F01C1C1E"/>
+            <corners android:radius="24dp"/>
+          </shape>
+          EOF
+
+          cat > app/src/main/res/xml/widget_info.xml <<'EOF'
+          <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+            android:minWidth="250dp"
+            android:minHeight="250dp"
+            android:updatePeriodMillis="1800000"
+            android:initialLayout="@layout/widget"
+            android:resizeMode="horizontal|vertical"
+            android:widgetCategory="home_screen"/>
+          EOF
+
+          {
+          echo '<?xml version="1.0" encoding="utf-8"?>'
+          echo '<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/root" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="14dp" android:background="@drawable/widget_bg">'
+          echo '<TextView android:layout_width="match_parent" android:layout_height="wrap_content" android:text="BUILDER TIMERS" android:textSize="11sp" android:textColor="#8E8E93" android:textStyle="bold" android:letterSpacing="0.1" android:paddingBottom="4dp"/>'
+          for i in 1 2 3 4 5 6; do
+          echo '<LinearLayout android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:gravity="center_vertical" android:orientation="horizontal">'
+          echo '<LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">'
+          echo '<TextView android:id="@+id/n'$i'" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textColor="#FFFFFF" android:textSize="14sp" android:textStyle="bold" android:maxLines="1"/>'
+          echo '<TextView android:id="@+id/s'$i'" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textColor="#8E8E93" android:textSize="11sp" android:maxLines="1"/>'
+          echo '</LinearLayout>'
+          echo '<FrameLayout android:layout_width="wrap_content" android:layout_height="wrap_content">'
+          echo '<Chronometer android:id="@+id/t'$i'" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textColor="#FF9F0A" android:textSize="15sp" android:textStyle="bold"/>'
+          echo '<TextView android:id="@+id/e'$i'" android:layout_width="wrap_content" android:layout_height="wrap_content" android:textColor="#30D158" android:textSize="15sp" android:textStyle="bold"/>'
+          echo '</FrameLayout>'
+          echo '</LinearLayout>'
+          done
+          echo '</LinearLayout>'
+          } > app/src/main/res/layout/widget.xml
+
+          cat > app/src/main/java/com/village/tracker/VillageWidget.java <<'EOF'
+          package com.village.tracker;
+
+          import android.app.AlarmManager;
+          import android.app.PendingIntent;
+          import android.appwidget.AppWidgetManager;
+          import android.appwidget.AppWidgetProvider;
+          import android.content.ComponentName;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.os.Build;
+          import android.os.SystemClock;
+          import android.view.View;
+          import android.widget.RemoteViews;
+          import java.text.SimpleDateFormat;
+          import java.util.Date;
+          import java.util.Locale;
+          import org.json.JSONArray;
+          import org.json.JSONObject;
+
+          public class VillageWidget extends AppWidgetProvider {
+            static final String REFRESH = "com.village.tracker.REFRESH";
+            static final int[] N = {R.id.n1, R.id.n2, R.id.n3, R.id.n4, R.id.n5, R.id.n6};
+            static final int[] S = {R.id.s1, R.id.s2, R.id.s3, R.id.s4, R.id.s5, R.id.s6};
+            static final int[] T = {R.id.t1, R.id.t2, R.id.t3, R.id.t4, R.id.t5, R.id.t6};
+            static final int[] E = {R.id.e1, R.id.e2, R.id.e3, R.id.e4, R.id.e5, R.id.e6};
+
+            static JSONArray load(Context c) {
+              try {
+                return new JSONArray(c.getSharedPreferences("v", 0).getString("w", "[]"));
+              } catch (Exception x) {
+                return new JSONArray();
+              }
+            }
+
+            @Override
+            public void onUpdate(Context c, AppWidgetManager m, int[] ids) {
+              for (int id : ids) m.updateAppWidget(id, build(c));
+              schedule(c);
+            }
+
+            @Override
+            public void onReceive(Context c, Intent i) {
+              super.onReceive(c, i);
+              if (REFRESH.equals(i.getAction())) {
+                AppWidgetManager m = AppWidgetManager.getInstance(c);
+                int[] ids = m.getAppWidgetIds(new ComponentName(c, VillageWidget.class));
+                onUpdate(c, m, ids);
+              }
+            }
+
+            static RemoteViews build(Context c) {
+              RemoteViews v = new RemoteViews(c.getPackageName(), R.layout.widget);
+              v.setOnClickPendingIntent(R.id.root,
+                PendingIntent.getActivity(c, 0, new Intent(c, MainActivity.class), PendingIntent.FLAG_IMMUTABLE));
+              JSONArray a = load(c);
+              long now = System.currentTimeMillis();
+              SimpleDateFormat f = new SimpleDateFormat("EEE h:mm a", Locale.getDefault());
+              for (int i = 0; i < 6; i++) {
+                String name = "Account " + (i + 1);
+                long e = 0;
+                JSONObject o = a.optJSONObject(i);
+                if (o != null) {
+                  name = o.optString("n", name);
+                  e = o.optLong("e", 0);
+                }
+                v.setTextViewText(N[i], name);
+                v.setViewVisibility(T[i], View.GONE);
+                v.setViewVisibility(E[i], View.VISIBLE);
+                if (e <= 0) {
+                  v.setTextViewText(E[i], "\u2014");
+                  v.setTextColor(E[i], 0xFF8E8E93);
+                  v.setTextViewText(S[i], "No timer");
+                } else if (e <= now) {
+                  v.setTextViewText(E[i], "End");
+                  v.setTextColor(E[i], 0xFF30D158);
+                  v.setTextViewText(S[i], "Finished " + f.format(new Date(e)));
+                } else {
+                  v.setViewVisibility(E[i], View.GONE);
+                  v.setViewVisibility(T[i], View.VISIBLE);
+                  v.setChronometerCountDown(T[i], true);
+                  v.setChronometer(T[i], SystemClock.elapsedRealtime() + (e - now), null, true);
+                  v.setTextViewText(S[i], "Ends " + f.format(new Date(e)));
+                }
+              }
+              return v;
+            }
+
+            static void schedule(Context c) {
+              JSONArray a = load(c);
+              long now = System.currentTimeMillis();
+              long next = 0;
+              for (int i = 0; i < a.length(); i++) {
+                JSONObject o = a.optJSONObject(i);
+                long e = o == null ? 0 : o.optLong("e", 0);
+                if (e > now && (next == 0 || e < next)) next = e;
+              }
+              AlarmManager am = (AlarmManager) c.getSystemService(Context.ALARM_SERVICE);
+              PendingIntent p = PendingIntent.getBroadcast(c, 1,
+                new Intent(c, VillageWidget.class).setAction(REFRESH),
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+              if (am == null) return;
+              if (next <= 0) {
+                am.cancel(p);
+                return;
+              }
+              long at = next + 300;
+              try {
+                if (Build.VERSION.SDK_INT >= 31 && !am.canScheduleExactAlarms()) {
+                  am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, p);
+                } else {
+                  am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, p);
+                }
+              } catch (SecurityException x) {
+                am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, p);
+              }
+            }
+          }
+          EOF
+
+          cat > app/src/main/java/com/village/tracker/MainActivity.java <<'EOF'
+          package com.village.tracker;
+
+          import android.app.Activity;
+          import android.content.ClipData;
+          import android.content.ClipboardManager;
+          import android.content.Context;
+          import android.content.Intent;
+          import android.content.SharedPreferences;
+          import android.os.Bundle;
+          import android.view.View;
+          import android.webkit.ConsoleMessage;
+          import android.webkit.JavascriptInterface;
+          import android.webkit.RenderProcessGoneDetail;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebResourceError;
+          import android.webkit.WebResourceRequest;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import android.widget.Toast;
+          import java.io.ByteArrayOutputStream;
+          import java.io.InputStream;
+
+          public class MainActivity extends Activity {
+            private WebView web;
+
+            private class Bridge {
+              @JavascriptInterface
+              public String get() {
+                ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                if (cm == null || !cm.hasPrimaryClip()) return "";
+                ClipData d = cm.getPrimaryClip();
+                if (d == null || d.getItemCount() == 0) return "";
+                CharSequence t = d.getItemAt(0).coerceToText(MainActivity.this);
+                return t == null ? "" : t.toString();
+              }
+
+              @JavascriptInterface
+              public void saveWidget(String json) {
+                getSharedPreferences("v", 0).edit().putString("w", json).apply();
+                sendBroadcast(new Intent(MainActivity.this, VillageWidget.class).setAction(VillageWidget.REFRESH));
+              }
+            }
+
+            private String readAsset() {
+              try {
+                InputStream in = getAssets().open("index.html");
+                ByteArrayOutputStream o = new ByteArrayOutputStream();
+                byte[] b = new byte[8192];
+                int n;
+                while ((n = in.read(b)) > 0) o.write(b, 0, n);
+                in.close();
+                return o.toString("UTF-8");
+              } catch (Exception e) {
+                return "<body style='background:#000;color:#fff'><h3>Could not load app: " + e + "</h3></body>";
+              }
+            }
+
+            @Override
+            protected void onCreate(Bundle s) {
+              super.onCreate(s);
+              SharedPreferences sp = getSharedPreferences("v", 0);
+              web = new WebView(this);
+              setContentView(web);
+              if (sp.getBoolean("sw", false)) web.setLayerType(View.LAYER_TYPE_SOFTWARE, null);
+              WebSettings st = web.getSettings();
+              st.setJavaScriptEnabled(true);
+              st.setDomStorageEnabled(true);
+              web.setBackgroundColor(0xFF05060C);
+              web.addJavascriptInterface(new Bridge(), "AndroidClip");
+              web.setWebViewClient(new WebViewClient() {
+                @Override
+                public boolean onRenderProcessGone(WebView v, RenderProcessGoneDetail d) {
+                  SharedPreferences p = getSharedPreferences("v", 0);
+                  int c = p.getInt("crash", 0) + 1;
+                  p.edit().putInt("crash", c).putBoolean("sw", true).apply();
+                  Toast.makeText(MainActivity.this, "Display restarted", Toast.LENGTH_SHORT).show();
+                  if (c < 4) recreate();
+                  return true;
+                }
+
+                @Override
+                public void onReceivedError(WebView v, WebResourceRequest r, WebResourceError e) {
+                  if (r.isForMainFrame()) {
+                    Toast.makeText(MainActivity.this, "Load error: " + e.getDescription(), Toast.LENGTH_LONG).show();
+                  }
+                }
+              });
+              web.setWebChromeClient(new WebChromeClient() {
+                @Override
+                public boolean onConsoleMessage(ConsoleMessage m) {
+                  if (m.messageLevel() == ConsoleMessage.MessageLevel.ERROR) {
+                    Toast.makeText(MainActivity.this, "JS: " + m.message(), Toast.LENGTH_LONG).show();
+                  }
+                  return true;
+                }
+              });
+              web.loadDataWithBaseURL("https://tissue.app/", readAsset(), "text/html", "UTF-8", null);
+            }
+
+            @Override
+            public void onBackPressed() {
+              if (web.canGoBack()) web.goBack(); else super.onBackPressed();
+            }
+          }
+          EOF
+
+      - name: Build APK
+        run: gradle assembleDebug --no-daemon
+
+      - name: Rename APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk Tissue.apk
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: Tissue v${{ github.run_number }}
+          files: Tissue.apk
